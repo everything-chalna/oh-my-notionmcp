@@ -1052,7 +1052,10 @@ async function main() {
 const isDirectRun = (() => {
   if (!process.argv[1]) return false
   try {
-    return path.resolve(process.argv[1]) === path.resolve(resolveBinPath())
+    // npm/npx often invokes the bin through a symlinked shim path.
+    const argvPath = fs.realpathSync(process.argv[1])
+    const binPath = fs.realpathSync(resolveBinPath())
+    return argvPath === binPath
   } catch {
     return false
   }
