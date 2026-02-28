@@ -190,7 +190,7 @@ export class OhMyNotionRouter {
   }
 
   private async connectFast(): Promise<FastBackendAdapter> {
-    const specPath = path.resolve(__dirname, '../../scripts/notion-openapi.json')
+    const specPath = path.resolve(__dirname, '../scripts/notion-openapi.json')
     return FastBackendAdapter.create(specPath)
   }
 
