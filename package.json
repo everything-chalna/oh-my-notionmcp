@@ -1,0 +1,46 @@
+{
+  "name": "oh-my-notionmcp",
+  "version": "0.1.0",
+  "description": "Single Notion MCP router: local cache-first reads with official OAuth fallback",
+  "type": "module",
+  "main": "bin/cli.mjs",
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "oh-my-notionmcp": "bin/cli.mjs"
+  },
+  "scripts": {
+    "serve": "node bin/cli.mjs serve",
+    "doctor": "node bin/cli.mjs doctor",
+    "install:project": "node bin/cli.mjs install --project . --name notion",
+    "login": "node bin/cli.mjs login",
+    "test": "node --test test/**/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.1",
+    "mcp-remote": "^0.1.38"
+  },
+  "keywords": [
+    "notion",
+    "mcp",
+    "oauth",
+    "router",
+    "cache",
+    "sqlite"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/everything-chalna/oh-my-notionmcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/everything-chalna/oh-my-notionmcp/issues"
+  },
+  "homepage": "https://github.com/everything-chalna/oh-my-notionmcp#readme"
+}
