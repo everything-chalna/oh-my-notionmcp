@@ -2,3 +2,23 @@ node_modules/
 .DS_Store
 coverage/
 *.log
+
+# Local MCP/auth config
+.mcp.json
+.mcp-auth/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Key/certificate artifacts
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Local credentials
+.npmrc

@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { OhMyNotionRouter, buildChildEnv, findMcpRemoteTokenFile, resolveFastBackendConfig } from '../bin/cli.mjs'
+import { OhMyNotionRouter, buildChildEnv, findMcpRemoteTokenFile, looksEmptyReadResult, resolveFastBackendConfig } from '../bin/cli.mjs'
 
 function restoreEnv(snapshot) {
   for (const [key, value] of Object.entries(snapshot)) {
@@ -33,6 +33,20 @@ test('buildRoutingTable exposes official tool surface when official backend exis
   assert.equal(router.routes.has('fast-only-tool'), false)
   assert.equal(router.routes.get('search').mode, 'fast-then-official-same-name')
   assert.equal(router.routes.get('fetch').mode, 'official-with-fast-boost')
+})
+
+test('buildRoutingTable blocks write tools when official backend is unavailable', () => {
+  const router = new OhMyNotionRouter({ fastBackend: {}, officialBackend: {} })
+  router.fast = {
+    tools: [{ name: 'search' }, { name: 'create-page' }, { name: 'get-users' }],
+  }
+  router.official = null
+
+  router.buildRoutingTable()
+
+  const exposedNames = router.exposedTools.map((tool) => tool.name).sort()
+  assert.deepEqual(exposedNames, ['get-users', 'search'])
+  assert.equal(router.routes.has('create-page'), false)
 })
 
 test('tryFastGetUsers forwards caller arguments to fast tool', async () => {
@@ -154,4 +168,22 @@ test('findMcpRemoteTokenFile selects a valid token payload', () => {
     restoreEnv(snapshot)
     fs.rmSync(baseDir, { recursive: true, force: true })
   }
+})
+
+test('looksEmptyReadResult identifies structured empty payloads', () => {
+  assert.equal(
+    looksEmptyReadResult({
+      content: [{ type: 'text', text: '{"results":[]}' }],
+      isError: false,
+    }),
+    true,
+  )
+
+  assert.equal(
+    looksEmptyReadResult({
+      content: [{ type: 'text', text: '{"results":[{"id":"1"}]}' }],
+      isError: false,
+    }),
+    false,
+  )
 })

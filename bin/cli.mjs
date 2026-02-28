@@ -42,6 +42,13 @@ const SAFE_CHILD_ENV_KEYS = [
   'WINDIR',
   'APPDATA',
   'LOCALAPPDATA',
+  'MCP_REMOTE_CONFIG_DIR',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
 ]
 
 const READ_HINT_PATTERNS = ['fetch', 'search', 'query', 'retrieve', 'read', 'get', 'list']
@@ -186,6 +193,32 @@ function toToolError(message, data = {}) {
   }
 }
 
+function maybeParseResultJson(result) {
+  if (!result || typeof result !== 'object' || !Array.isArray(result.content)) return null
+  for (const item of result.content) {
+    if (!item || item.type !== 'text' || typeof item.text !== 'string') continue
+    try {
+      return JSON.parse(item.text)
+    } catch {
+      // not JSON
+    }
+  }
+  return null
+}
+
+function looksEmptyReadResult(result) {
+  if (!result || typeof result !== 'object' || result.isError === true) {
+    return false
+  }
+  const parsed = maybeParseResultJson(result)
+  if (!parsed || typeof parsed !== 'object') return false
+
+  if (Array.isArray(parsed.results) && parsed.results.length === 0) return true
+  if (Array.isArray(parsed.users) && parsed.users.length === 0) return true
+  if (Array.isArray(parsed.items) && parsed.items.length === 0) return true
+  return false
+}
+
 function extractUuidish(idOrUrl) {
   const input = String(idOrUrl)
   const noDash = input.match(/[0-9a-fA-F]{32}/)
@@ -200,7 +233,12 @@ function loadMcpConfig(mcpPath) {
     return { mcpServers: {} }
   }
   const raw = fs.readFileSync(mcpPath, 'utf8')
-  const parsed = JSON.parse(raw)
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${mcpPath}: ${(error instanceof Error && error.message) || String(error)}`)
+  }
   if (!parsed || typeof parsed !== 'object') {
     throw new Error(`Invalid .mcp.json at ${mcpPath}: root must be an object`)
   }
@@ -330,6 +368,31 @@ function resolveOfficialBackendConfig() {
   }
 }
 
+function sensitiveEnvKey(key) {
+  const normalized = String(key || '').toUpperCase()
+  return (
+    normalized.includes('TOKEN') ||
+    normalized.includes('SECRET') ||
+    normalized.includes('PASSWORD') ||
+    normalized.includes('AUTH') ||
+    normalized.endsWith('_KEY') ||
+    normalized.includes('PRIVATE')
+  )
+}
+
+function sanitizePersistedEnv(envObj) {
+  const sanitized = {}
+  const redactedKeys = []
+  for (const [key, value] of Object.entries(envObj || {})) {
+    if (sensitiveEnvKey(key)) {
+      redactedKeys.push(key)
+      continue
+    }
+    sanitized[key] = String(value)
+  }
+  return { sanitized, redactedKeys }
+}
+
 function runCommand(command, args, opts = {}) {
   return spawnSync(command, args, {
     cwd: opts.cwd,
@@ -403,24 +466,31 @@ class OhMyNotionRouter {
   async start() {
     const backendErrors = []
 
-    try {
-      this.fast = new BackendClient('fast', this.fastSpec)
-      await this.fast.connect()
-    } catch (error) {
-      backendErrors.push(`fast backend unavailable: ${error instanceof Error ? error.message : String(error)}`)
+    const [fastResult, officialResult] = await Promise.allSettled([this.connectFast(), this.connectOfficial()])
+
+    if (fastResult.status === 'rejected') {
+      backendErrors.push(`fast backend unavailable: ${fastResult.reason instanceof Error ? fastResult.reason.message : String(fastResult.reason)}`)
       this.fast = null
+    } else {
+      this.fast = fastResult.value
     }
 
-    try {
-      this.official = new BackendClient('official', this.officialSpec)
-      await this.official.connect()
-    } catch (error) {
-      backendErrors.push(`official backend unavailable: ${error instanceof Error ? error.message : String(error)}`)
+    if (officialResult.status === 'rejected') {
+      backendErrors.push(`official backend unavailable: ${officialResult.reason instanceof Error ? officialResult.reason.message : String(officialResult.reason)}`)
       this.official = null
+    } else {
+      this.official = officialResult.value
     }
 
     if (!this.fast && !this.official) {
       throw new Error(`No backend available. ${backendErrors.join(' | ')}`)
+    }
+
+    if (backendErrors.length > 0) {
+      console.error(`[${APP_DISPLAY_NAME}] WARN: running in degraded mode`)
+      for (const line of backendErrors) {
+        console.error(`[${APP_DISPLAY_NAME}] WARN: ${line}`)
+      }
     }
 
     this.buildRoutingTable()
@@ -443,6 +513,18 @@ class OhMyNotionRouter {
     await Promise.all([this.fast?.close(), this.official?.close()])
   }
 
+  async connectFast() {
+    const client = new BackendClient('fast', this.fastSpec)
+    await client.connect()
+    return client
+  }
+
+  async connectOfficial() {
+    const client = new BackendClient('official', this.officialSpec)
+    await client.connect()
+    return client
+  }
+
   buildRoutingTable() {
     const officialTools = this.official ? this.official.tools : []
     const fastTools = this.fast ? this.fast.tools : []
@@ -454,7 +536,9 @@ class OhMyNotionRouter {
     // - when official backend exists, only expose official tools
     // - fast backend can accelerate reads for official tools, but does not add extra tool surface
     // - when official backend is unavailable, degrade to fast-only tool surface
-    const allNames = this.official ? new Set(officialByName.keys()) : new Set(fastByName.keys())
+    const allNames = this.official
+      ? new Set(officialByName.keys())
+      : new Set([...fastByName.keys()].filter((toolName) => looksReadTool(toolName) && !looksWriteTool(toolName)))
     const exposed = []
 
     for (const toolName of allNames) {
@@ -528,7 +612,7 @@ class OhMyNotionRouter {
 
       if (route.mode === 'official-with-fast-boost') {
         const boosted = await this.tryOfficialReadBoost(toolName, args)
-        if (boosted && !isErrorToolResult(boosted)) {
+        if (boosted && !isErrorToolResult(boosted) && !looksEmptyReadResult(boosted)) {
           return boosted
         }
         return this.callOfficialOrError(toolName, args)
@@ -536,7 +620,7 @@ class OhMyNotionRouter {
 
       if (route.mode === 'fast-then-official-same-name') {
         const fastResult = await this.callFastOrError(toolName, args)
-        if (!isErrorToolResult(fastResult)) {
+        if (!isErrorToolResult(fastResult) && !looksEmptyReadResult(fastResult)) {
           return fastResult
         }
         if (this.official && this.official.hasTool(toolName)) {
@@ -683,6 +767,8 @@ function commandInstall(options) {
   const selfBin = resolveBinPath()
   const fastBackend = resolveFastBackendConfig()
   const officialBackend = resolveOfficialBackendConfig()
+  const { sanitized: persistedFastEnv, redactedKeys: redactedFastKeys } = sanitizePersistedEnv(fastBackend.env)
+  const { sanitized: persistedOfficialEnv, redactedKeys: redactedOfficialKeys } = sanitizePersistedEnv(officialBackend.env)
 
   const entry = {
     command: 'node',
@@ -690,10 +776,10 @@ function commandInstall(options) {
     env: {
       OHMY_NOTION_FAST_COMMAND: fastBackend.command,
       OHMY_NOTION_FAST_ARGS_JSON: JSON.stringify(fastBackend.args),
-      OHMY_NOTION_FAST_ENV_JSON: JSON.stringify(fastBackend.env),
+      OHMY_NOTION_FAST_ENV_JSON: JSON.stringify(persistedFastEnv),
       OHMY_NOTION_OFFICIAL_COMMAND: officialBackend.command,
       OHMY_NOTION_OFFICIAL_ARGS_JSON: JSON.stringify(officialBackend.args),
-      OHMY_NOTION_OFFICIAL_ENV_JSON: JSON.stringify(officialBackend.env),
+      OHMY_NOTION_OFFICIAL_ENV_JSON: JSON.stringify(persistedOfficialEnv),
     },
   }
 
@@ -710,6 +796,10 @@ function commandInstall(options) {
   console.log(`Updated ${mcpPath}`)
   console.log(`- Added/updated router server: ${serverName}`)
   console.log(`- Command: node ${selfBin} serve`)
+  if (redactedFastKeys.length > 0 || redactedOfficialKeys.length > 0) {
+    const all = [...redactedFastKeys, ...redactedOfficialKeys]
+    console.log(`- Security: redacted sensitive env keys from persisted config: ${all.join(', ')}`)
+  }
   console.log('')
   console.log('Next steps:')
   console.log(`1) ${APP_BIN_NAME} login`)
@@ -732,7 +822,8 @@ function commandLogin() {
 
   const interrupted = result.signal === 'SIGINT' || result.status === 130
   if (result.status !== 0 && !interrupted) {
-    throw new Error(`login failed: exit=${result.status}`)
+    const signalSuffix = result.signal ? ` signal=${result.signal}` : ''
+    throw new Error(`login failed: exit=${result.status}${signalSuffix}`)
   }
 }
 
@@ -758,6 +849,39 @@ function tokenFileIsUsable(filePath) {
   }
 }
 
+function hashForMcpRemoteContext(serverUrl, authorizeResource = '', headers = []) {
+  return crypto.createHash('md5').update(`${serverUrl}${authorizeResource}${JSON.stringify(headers)}`).digest('hex')
+}
+
+function extractMcpRemoteHashContext(command, args = []) {
+  const list = Array.isArray(args) ? args : []
+  let url = OFFICIAL_MCP_URL
+  if (command === 'node' && list.length >= 2) {
+    url = list[1] || url
+  } else if (command === 'npx') {
+    const pkgIndex = list.findIndex((entry) => entry === 'mcp-remote')
+    if (pkgIndex >= 0 && typeof list[pkgIndex + 1] === 'string') {
+      url = list[pkgIndex + 1]
+    }
+  }
+
+  let authorizeResource = ''
+  const headers = []
+  for (let i = 0; i < list.length; i += 1) {
+    if (list[i] === '--authorize-resource' && typeof list[i + 1] === 'string') {
+      authorizeResource = list[i + 1]
+      i += 1
+      continue
+    }
+    if (list[i] === '--header' && typeof list[i + 1] === 'string') {
+      headers.push(list[i + 1])
+      i += 1
+    }
+  }
+
+  return { serverUrl: url, authorizeResource, headers }
+}
+
 function findMcpRemoteTokenFile(serverHash) {
   const baseDir = process.env.MCP_REMOTE_CONFIG_DIR || path.join(os.homedir(), '.mcp-auth')
   if (!fs.existsSync(baseDir)) {
@@ -768,10 +892,15 @@ function findMcpRemoteTokenFile(serverHash) {
   const directPath = path.join(baseDir, serverHash, 'tokens.json')
   candidates.push(directPath)
 
-  const versionDirs = fs
-    .readdirSync(baseDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith('mcp-remote-'))
-    .map((entry) => path.join(baseDir, entry.name))
+  let versionDirs = []
+  try {
+    versionDirs = fs
+      .readdirSync(baseDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('mcp-remote-'))
+      .map((entry) => path.join(baseDir, entry.name))
+  } catch {
+    return null
+  }
 
   for (const dir of versionDirs) {
     candidates.push(path.join(dir, `${serverHash}_tokens.json`))
@@ -781,7 +910,13 @@ function findMcpRemoteTokenFile(serverHash) {
   const existingValid = candidates
     .filter((candidate) => fs.existsSync(candidate))
     .filter((candidate) => tokenFileIsUsable(candidate))
-    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)
+    .sort((a, b) => {
+      try {
+        return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs
+      } catch {
+        return 0
+      }
+    })
 
   if (existingValid.length > 0) {
     return existingValid[0]
@@ -838,17 +973,27 @@ function commandDoctor(options) {
     }
   }
 
-  const hash = getMcpRemoteServerHash()
-  const tokenPath = findMcpRemoteTokenFile(hash)
+  const officialBackend = resolveOfficialBackendConfig()
+  const defaultHash = getMcpRemoteServerHash()
+  const ctx = extractMcpRemoteHashContext(officialBackend.command, officialBackend.args)
+  const contextHash = hashForMcpRemoteContext(ctx.serverUrl, ctx.authorizeResource, ctx.headers)
+  const candidateHashes = [...new Set([defaultHash, contextHash])]
+
+  let tokenPath = null
+  for (const hash of candidateHashes) {
+    tokenPath = findMcpRemoteTokenFile(hash)
+    if (tokenPath) break
+  }
+
   if (tokenPath) {
     console.log(`OK: OAuth token cache exists (${tokenPath})`)
   } else {
     const baseDir = process.env.MCP_REMOTE_CONFIG_DIR || path.join(os.homedir(), '.mcp-auth')
     if (allowMissingAuth) {
-      console.log(`WARN: OAuth token cache not found under ${baseDir} for hash ${hash}`)
+      console.log(`WARN: OAuth token cache not found under ${baseDir} for hashes ${candidateHashes.join(', ')}`)
       console.log(`      run '${APP_BIN_NAME} login' to initialize official OAuth cache`)
     } else {
-      console.log(`FAIL: OAuth token cache not found under ${baseDir} for hash ${hash}`)
+      console.log(`FAIL: OAuth token cache not found under ${baseDir} for hashes ${candidateHashes.join(', ')}`)
       console.log(`      run '${APP_BIN_NAME} login' to initialize official OAuth cache`)
       console.log("      if this is intentional, rerun doctor with '--allow-missing-auth'")
       failed = true
@@ -928,6 +1073,7 @@ export {
   commandLogin,
   extractUuidish,
   findMcpRemoteTokenFile,
+  looksEmptyReadResult,
   looksReadTool,
   looksWriteTool,
   npxFallbackAllowed,

@@ -15,7 +15,7 @@
 For many reads, local SQLite cache access is faster than remote API round-trips.
 
 - cached/visited content: fast local hit
-- uncached/not-yet-visited content: automatic official fallback
+- fast miss/error (including empty structured results): automatic official fallback
 
 ## Why `notion.db` (Not IndexedDB)
 
@@ -50,13 +50,14 @@ oh-my-notionmcp doctor --project /path/to/project --name notion
 ## Commands
 
 - `oh-my-notionmcp serve`
-- `oh-my-notionmcp install --project <dir> --name <server-name>`
+- `oh-my-notionmcp install [--project <dir>] [--name <mcp-server-name>]`
 - `oh-my-notionmcp login`
-- `oh-my-notionmcp doctor --project <dir> --name <server-name> [--allow-missing-auth]`
+- `oh-my-notionmcp doctor [--project <dir>] [--name <mcp-server-name>] [--allow-missing-auth]`
 
 ## Security Defaults
 
 - `--fast-token` is blocked to prevent writing secrets into `.mcp.json`.
+- Sensitive env keys from `OHMY_NOTION_*_ENV_JSON` are redacted before being persisted by `install`.
 - Child backend processes receive a minimal allowlisted environment.
 - `npx` runtime fallback is disabled by default.
   - To allow it explicitly: `OHMY_NOTION_ALLOW_NPX_FALLBACK=true`
