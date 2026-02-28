@@ -1,49 +1,51 @@
-# oh-my-NotionMCP
+# OhMyNotionMCP
 
-`oh-my-NotionMCP` is a single Notion MCP router with a cache-first read path:
+Fast, unified MCP server for Notion on macOS:
 
-- Read:
-  - 1st: local Notion desktop cache (`notion.db`) via `notion-mcp-fast`
-  - 2nd: official Notion MCP fallback (OAuth)
-- Write:
-  - official Notion MCP only (OAuth)
+- local-cache-first reads for speed
+- official MCP fallback for uncached/degraded reads
+- official MCP passthrough for writes
 
-`oh-my-notionmcp` keeps fast+official behavior under one MCP server contract (`notion`) so clients do not need separate fast/offical aliases.
+## Why I Built This
+
+When using the official Notion MCP with Claude Code, read workflows often felt slow and context-heavy.
+
+The problem:
+
+- official MCP uses network/API calls for reads
+- repeated exploration adds latency and token/context cost
+- reads may include more metadata than needed for quick iteration
+
+My solution: read from Notion desktop's local cache first, then fallback to official MCP when needed.
+
+`oh-my-notionmcp` routes requests like this:
+
+- Read: local cache (`notion.db`) via `notion-mcp-fast` -> official Notion MCP fallback
+- Write: official Notion MCP only
+
+This keeps one MCP alias (`notion`) while combining speed and compatibility.
 
 ## Why It Is Fast
 
-For many reads, local SQLite cache access is faster than remote API round-trips.
-
-- cached/visited content: fast local hit
-- fast miss/error (including empty structured results): automatic official fallback
+- zero network round-trip on local cache hits
+- smaller/faster iteration for frequent read workflows
+- automatic fallback to official MCP on miss/error
 
 ## Why `notion.db` (Not IndexedDB)
 
-This project targets the local cache used by the Notion desktop app, which is stored in local database files (`notion.db`), not browser IndexedDB.  
-So "fast read" here means local `notion.db` query path.
+Notion desktop cache for this flow is read from local database files (`notion.db`) via `notion-mcp-fast`.
 
-## Single Server Contract
+## Requirements
 
-Expose and use one alias only (recommended: `notion`).
-
-- use `notion` for all Notion prompts
-- do not call separate `notion-fast` / `notion-official` aliases
+- macOS (Notion desktop cache path expected by `notion-mcp-fast`)
+- Notion desktop app installed and opened at least once
+- official Notion MCP OAuth login for fallback/write path
 
 ## Install
 
 ```bash
 oh-my-notionmcp install --project /path/to/project --name notion
-```
-
-Then bootstrap OAuth:
-
-```bash
 oh-my-notionmcp login
-```
-
-Then verify:
-
-```bash
 oh-my-notionmcp doctor --project /path/to/project --name notion
 ```
 
@@ -56,11 +58,10 @@ oh-my-notionmcp doctor --project /path/to/project --name notion
 
 ## Security Defaults
 
-- `--fast-token` is blocked to prevent writing secrets into `.mcp.json`.
-- Sensitive env keys from `OHMY_NOTION_*_ENV_JSON` are redacted before being persisted by `install`.
-- Child backend processes receive a minimal allowlisted environment.
-- `npx` runtime fallback is disabled by default.
-  - To allow it explicitly: `OHMY_NOTION_ALLOW_NPX_FALLBACK=true`
+- `--fast-token` is blocked to prevent secrets in `.mcp.json`
+- sensitive keys from `OHMY_NOTION_*_ENV_JSON` are redacted on install
+- child backend processes use a safe env allowlist
+- `npx` fallback is off by default (`OHMY_NOTION_ALLOW_NPX_FALLBACK=true` to enable)
 
 ## Environment Overrides
 
@@ -73,8 +74,3 @@ oh-my-notionmcp doctor --project /path/to/project --name notion
 - `OHMY_NOTION_OFFICIAL_ARGS_JSON`
 - `OHMY_NOTION_OFFICIAL_ENV_JSON`
 - `OHMY_NOTION_OFFICIAL_CWD`
-
-Default fast env:
-
-- `NOTION_MCP_FAST_LOCAL_APP_CACHE_ENABLED=true`
-- `NOTION_MCP_FAST_LOCAL_APP_CACHE_TRUST_ENABLED=true`
