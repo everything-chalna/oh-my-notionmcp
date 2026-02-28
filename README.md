@@ -6,6 +6,8 @@ Fast, unified MCP server for Notion on macOS:
 - official MCP fallback for uncached/degraded reads
 - official MCP passthrough for writes
 
+Release notes: see [CHANGELOG.md](./CHANGELOG.md)
+
 ## Why I Built This
 
 When using the official Notion MCP with Claude Code, read workflows often felt slow and context-heavy.
