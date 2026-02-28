@@ -1,7 +1,7 @@
 {
   "name": "oh-my-notionmcp",
   "version": "0.1.0",
-  "description": "Single Notion MCP router: local cache-first reads with official OAuth fallback",
+  "description": "Fast unified Notion MCP on macOS: local-cache-first reads, official fallback, official writes",
   "type": "module",
   "main": "bin/cli.mjs",
   "files": [

@@ -8,6 +8,10 @@ Fast, unified MCP server for Notion on macOS:
 
 Release notes: see [CHANGELOG.md](./CHANGELOG.md)
 
+## Description
+
+OhMyNotionMCP combines `notion-mcp-fast` and official Notion MCP behind one server alias (`notion`) so reads are fast by default and writes stay fully compatible.
+
 ## Why I Built This
 
 When using the official Notion MCP with Claude Code, read workflows often felt slow and context-heavy.
