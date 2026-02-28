@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Single-router Notion MCP package (`oh-my-notionmcp`)
-- Cache-first read path via local Notion desktop cache (`notion.db`) through `notion-mcp-fast`
+- Cache-first read path via local Notion desktop cache (`notion.db`) through in-process fast backend
 - Official Notion MCP fallback for read misses/degraded reads
 - Official Notion MCP passthrough for write operations
 - CLI commands: `serve`, `install`, `login`, `doctor`
