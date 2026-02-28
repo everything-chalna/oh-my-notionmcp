@@ -1,19 +1,51 @@
 # oh-my-notionmcp
 
-You ask your AI agent to look up a Notion page. The official Notion MCP fires an API call, waits for the response, and hands back the full payload. Two seconds later you ask for the same page's children. Another API call. Same latency. Same bloated response. Repeat this fifty times during a coding session and you've burned through tokens, rate limits, and patience.
+Ask your AI agent to read a Notion page. Here's what the official Notion MCP sends back for a paragraph that says "Hello world":
 
-oh-my-notionmcp puts a local-first read layer in front of the official Notion MCP. Reads cascade through up to four levels before hitting the network, and when they do hit the network, the response gets cached so the next call doesn't have to.
+```json
+{
+  "object": "block",
+  "id": "a1b2c3d4-...",
+  "parent": { "type": "page_id", "page_id": "..." },
+  "created_time": "2025-01-15T10:30:00.000Z",
+  "last_edited_time": "2025-01-15T10:30:00.000Z",
+  "created_by": { "object": "user", "id": "..." },
+  "last_edited_by": { "object": "user", "id": "..." },
+  "has_children": false,
+  "archived": false,
+  "in_trash": false,
+  "type": "paragraph",
+  "paragraph": {
+    "rich_text": [{
+      "type": "text",
+      "text": { "content": "Hello world", "link": null },
+      "annotations": {
+        "bold": false, "italic": false, "strikethrough": false,
+        "underline": false, "code": false, "color": "default"
+      },
+      "plain_text": "Hello world",
+      "href": null
+    }],
+    "color": "default"
+  }
+}
+```
+
+That's ~500 bytes of JSON to say "Hello world". Not bold, not italic, not strikethrough, not underline, not code, not colored -- the API makes sure you know about every single formatting option this text _isn't_ using. Multiply this by 50 blocks on a page, and your agent just consumed 25KB of context to read what a human would scan in three seconds.
+
+Now do that for every page, every block, every database query in a working session. Every call is a fresh API round-trip. No caching. The same page you read 10 seconds ago? Full network request, full metadata payload, all over again.
+
+oh-my-notionmcp fixes both problems: it caches responses so repeated reads are instant, and when enabled, it reads directly from Notion desktop's local SQLite database -- skipping the network entirely.
+
+## The Speedup
 
 ```
-Request flow:
-
-1. Response cache (in-memory + disk)  -- hit? done. <1ms.
-2. Local Notion desktop SQLite        -- hit? done. <10ms.
-3. Notion API (via fast backend)      -- response cached for next time.
-4. Official Notion MCP (fallback)     -- full compatibility, always available.
+First read:    Notion API call, response cached.             ~200-500ms
+Same read again (within 30s): cache hit.                     <1ms
+With local SQLite enabled: Notion desktop DB query.          <10ms
 ```
 
-Writes always go through the official MCP. No shortcuts there.
+No metadata stripping (Notion's API format is preserved for compatibility), but you stop paying the network tax over and over for the same data. In a typical AI coding session that hits the same pages repeatedly, most reads become cache hits after the first pass.
 
 ## How It Works
 
@@ -22,25 +54,26 @@ Two backends run behind a single MCP server alias:
 ```
 oh-my-notionmcp (router)
 |
-|-- Fast backend (in-process, no subprocess overhead)
-|   |-- OpenAPI-generated read tools
-|   |-- Response cache (30s TTL, 300 entries, LRU eviction)
+|-- Fast backend (in-process, zero subprocess overhead)
+|   |-- Response cache (30s TTL, 300 entries, LRU)
 |   |-- Notion desktop SQLite fast-path (optional)
-|   '-- Notion API client (Axios)
+|   '-- Notion API client
 |
-'-- Official backend (child process via mcp-remote)
-    '-- https://mcp.notion.com/mcp
+'-- Official backend (child process, only when needed)
+    '-- mcp-remote -> https://mcp.notion.com/mcp
 ```
 
-The fast backend runs in-process -- no child process, no IPC overhead. The official backend runs as a separate child process only when needed (writes, fallback reads).
+Reads go through the fast backend first. Cache hit? Done. Cache miss? Try local SQLite. Still no? Hit the API and cache the result. Writes always go through the official backend.
+
+The fast backend runs in-process -- not as a child process. No IPC serialization, no startup cost. The official backend only spins up for writes or when the fast backend can't handle a request.
 
 ### OpenAPI-Driven Tool Generation
 
-Tools aren't hardcoded. The fast backend reads `scripts/notion-openapi.json` at startup and generates MCP tools from the OpenAPI spec automatically. Adding a new Notion API endpoint means updating the JSON file and restarting. No code changes.
+Tools aren't hardcoded. The fast backend reads an OpenAPI spec at startup and generates MCP tools automatically. Adding a new Notion API endpoint means updating a JSON file and restarting -- no code changes.
 
-### The Local SQLite Fast-Path
+### The Local SQLite Trick
 
-Notion desktop (the Electron app) keeps a local SQLite database at `~/Library/Application Support/Notion/notion.db`. When enabled, oh-my-notionmcp queries this database directly for `retrieve-a-page`, `retrieve-a-block`, and `get-block-children`. The result gets transformed into the official API response format, so downstream consumers can't tell the difference.
+Notion desktop is an Electron app. It keeps a SQLite database at `~/Library/Application Support/Notion/notion.db` with your synced workspace data. When enabled, oh-my-notionmcp queries this database directly and transforms the result into the official API response format. Downstream consumers can't tell the difference, but the read happened without touching the network.
 
 ## Quick Start
 
