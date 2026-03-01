@@ -1,4 +1,3 @@
-import crypto from 'node:crypto'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -17,7 +16,7 @@ import {
   APP_VERSION,
   OFFICIAL_MCP_URL,
   extractUuidish,
-  findAndClearTokenCache,
+
   isErrorToolResult,
   looksAuthError,
   looksEmptyReadResult,
@@ -214,17 +213,6 @@ export class OhMyNotionRouter {
   }
 
   private async connectOfficial(): Promise<BackendClient> {
-    // Clear cached OAuth tokens to force fresh authentication on every startup.
-    // Users may want to switch Notion accounts between sessions.
-    const serverUrl = this.extractServerUrl()
-    const urlHash = crypto.createHash('md5').update(serverUrl).digest('hex')
-    const cacheResult = findAndClearTokenCache(urlHash)
-    if (cacheResult.deletedFiles > 0) {
-      console.error(
-        `[${APP_DISPLAY_NAME}] cleared ${cacheResult.deletedFiles} cached OAuth token files (fresh login required)`,
-      )
-    }
-
     const client = new BackendClient('official', this.officialSpec)
     // 30s timeout to allow OAuth browser flow completion
     const timeout = new Promise<never>((_, reject) =>
