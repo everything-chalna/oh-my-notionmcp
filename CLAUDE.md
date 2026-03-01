@@ -109,7 +109,9 @@ When the official backend (child process) crashes or becomes unresponsive:
 
 ### Connect Timeout
 
-- `connectOfficial()` has a 30-second timeout
+- `connectOfficial()` has a 30-second timeout (allows OAuth browser flow completion)
+- On every startup, cached OAuth tokens are cleared to force fresh authentication
+- This ensures users can switch Notion accounts between sessions
 - If timeout expires, router enters degraded mode (fast-only, read-only tools)
 - Warning logged to stderr
 

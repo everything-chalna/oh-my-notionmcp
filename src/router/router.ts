@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -14,7 +15,9 @@ import type { BackendSpec } from './config.js'
 import {
   APP_DISPLAY_NAME,
   APP_VERSION,
+  OFFICIAL_MCP_URL,
   extractUuidish,
+  findAndClearTokenCache,
   isErrorToolResult,
   looksAuthError,
   looksEmptyReadResult,
@@ -211,12 +214,38 @@ export class OhMyNotionRouter {
   }
 
   private async connectOfficial(): Promise<BackendClient> {
+    // Clear cached OAuth tokens to force fresh authentication on every startup.
+    // Users may want to switch Notion accounts between sessions.
+    const serverUrl = this.extractServerUrl()
+    const urlHash = crypto.createHash('md5').update(serverUrl).digest('hex')
+    const cacheResult = findAndClearTokenCache(urlHash)
+    if (cacheResult.deletedFiles > 0) {
+      console.error(
+        `[${APP_DISPLAY_NAME}] cleared ${cacheResult.deletedFiles} cached OAuth token files (fresh login required)`,
+      )
+    }
+
     const client = new BackendClient('official', this.officialSpec)
+    // 30s timeout to allow OAuth browser flow completion
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('official backend connect timed out after 30s')), 30_000),
     )
     await Promise.race([client.connect(), timeout])
     return client
+  }
+
+  private extractServerUrl(): string {
+    const args = this.officialSpec.args
+    if (this.officialSpec.command === 'node' && args.length >= 2) {
+      return args[1] || OFFICIAL_MCP_URL
+    }
+    if (this.officialSpec.command === 'npx') {
+      const pkgIndex = args.findIndex((a) => a === 'mcp-remote')
+      if (pkgIndex >= 0 && args[pkgIndex + 1]) {
+        return args[pkgIndex + 1]
+      }
+    }
+    return OFFICIAL_MCP_URL
   }
 
   /** Build the tool routing table from the union of fast and official tool sets. */
