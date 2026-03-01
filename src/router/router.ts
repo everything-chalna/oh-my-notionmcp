@@ -152,39 +152,23 @@ export class OhMyNotionRouter {
     this.routes = new Map()
   }
 
-  /** Connect both backends, build routing table, and begin serving over stdio. */
+  /** Connect fast backend, build routing table, and begin serving over stdio.
+   *  Official backend connects lazily on first tool call that needs it. */
   async start(): Promise<void> {
-    const backendErrors: string[] = []
-
-    const [fastResult, officialResult] = await Promise.allSettled([this.connectFast(), this.connectOfficial()])
-
-    if (fastResult.status === 'rejected') {
-      backendErrors.push(
-        `fast backend unavailable: ${fastResult.reason instanceof Error ? fastResult.reason.message : String(fastResult.reason)}`,
-      )
+    try {
+      this.fast = await this.connectFast()
+    } catch (err) {
       this.fast = null
-    } else {
-      this.fast = fastResult.value
+      console.error(`[${APP_DISPLAY_NAME}] WARN: fast backend unavailable: ${err instanceof Error ? err.message : String(err)}`)
     }
 
-    if (officialResult.status === 'rejected') {
-      backendErrors.push(
-        `official backend unavailable: ${officialResult.reason instanceof Error ? officialResult.reason.message : String(officialResult.reason)}`,
-      )
-      this.official = null
-    } else {
-      this.official = officialResult.value
-    }
+    // Official backend is NOT connected eagerly — mcp-remote opens a
+    // browser for OAuth when tokens are missing/expired.  We defer to
+    // the first tool call that actually needs it (callOfficialOrError).
+    this.official = null
 
-    if (!this.fast && !this.official) {
-      throw new Error(`No backend available. ${backendErrors.join(' | ')}`)
-    }
-
-    if (backendErrors.length > 0) {
-      console.error(`[${APP_DISPLAY_NAME}] WARN: running in degraded mode`)
-      for (const line of backendErrors) {
-        console.error(`[${APP_DISPLAY_NAME}] WARN: ${line}`)
-      }
+    if (!this.fast) {
+      throw new Error('No backend available (fast backend failed and official backend is deferred)')
     }
 
     this.buildRoutingTable()
