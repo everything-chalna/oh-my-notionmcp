@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -16,7 +17,8 @@ import {
   APP_VERSION,
   OFFICIAL_MCP_URL,
   extractUuidish,
-
+  findAndClearTokenCache,
+  hasCachedTokens,
   isErrorToolResult,
   looksAuthError,
   looksEmptyReadResult,
@@ -152,8 +154,8 @@ export class OhMyNotionRouter {
     this.routes = new Map()
   }
 
-  /** Connect fast backend, build routing table, and begin serving over stdio.
-   *  Official backend connects lazily on first tool call that needs it. */
+  /** Connect fast backend and optionally official backend, then serve over stdio.
+   *  Official connects eagerly only if cached OAuth tokens exist; otherwise deferred. */
   async start(): Promise<void> {
     try {
       this.fast = await this.connectFast()
@@ -162,13 +164,23 @@ export class OhMyNotionRouter {
       console.error(`[${APP_DISPLAY_NAME}] WARN: fast backend unavailable: ${err instanceof Error ? err.message : String(err)}`)
     }
 
-    // Official backend is NOT connected eagerly — mcp-remote opens a
-    // browser for OAuth when tokens are missing/expired.  We defer to
-    // the first tool call that actually needs it (callOfficialOrError).
-    this.official = null
+    // Only connect official eagerly if cached tokens exist (silent reconnect).
+    // When tokens are missing (first launch or post-reconnect), defer to
+    // first tool call so OAuth popup doesn't block startup.
+    const serverUrl = this.extractServerUrl()
+    if (hasCachedTokens(serverUrl)) {
+      try {
+        this.official = await this.connectOfficial()
+      } catch (err) {
+        this.official = null
+        console.error(`[${APP_DISPLAY_NAME}] WARN: official backend unavailable: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    } else {
+      this.official = null
+    }
 
-    if (!this.fast) {
-      throw new Error('No backend available (fast backend failed and official backend is deferred)')
+    if (!this.fast && !this.official) {
+      throw new Error('No backend available')
     }
 
     this.buildRoutingTable()
@@ -182,6 +194,10 @@ export class OhMyNotionRouter {
       process.exit(0)
     })
     process.on('SIGTERM', async () => {
+      // Clear OAuth tokens so next start triggers fresh auth on first tool call
+      const urlHash = crypto.createHash('md5').update(serverUrl).digest('hex')
+      findAndClearTokenCache(urlHash)
+      console.error(`[${APP_DISPLAY_NAME}] OAuth tokens cleared for reconnect`)
       await this.shutdown()
       process.exit(0)
     })

@@ -311,7 +311,8 @@ describe('connection flow integration', () => {
       ;(router as any).server = { connect: () => Promise.resolve() }
 
       const startPromise = router.start().catch((err: Error) => err)
-      await vi.advanceTimersByTimeAsync(31_000)
+      // connectFast fails at 5s, then connectOfficial starts and fails at 5s+30s=35s
+      await vi.advanceTimersByTimeAsync(36_000)
       const error = await startPromise
 
       expect(error).toBeInstanceOf(Error)
