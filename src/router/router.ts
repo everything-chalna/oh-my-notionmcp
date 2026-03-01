@@ -1,4 +1,6 @@
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -30,6 +32,8 @@ import {
 } from './utils.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+const RECONNECT_FLAG = path.join(os.tmpdir(), 'oh-my-notion-reconnect')
 
 const REAUTH_TOOL_NAME = 'oh-my-notionmcp-reauth'
 
@@ -164,11 +168,17 @@ export class OhMyNotionRouter {
       console.error(`[${APP_DISPLAY_NAME}] WARN: fast backend unavailable: ${err instanceof Error ? err.message : String(err)}`)
     }
 
-    // Only connect official eagerly if cached tokens exist (silent reconnect).
-    // When tokens are missing (first launch or post-reconnect), defer to
-    // first tool call so OAuth popup doesn't block startup.
+    // Check reconnect flag (set by SIGTERM handler during /mcp reconnect).
+    // When reconnecting: tokens were cleared, but we still eagerly connect
+    // to trigger immediate OAuth re-authentication (like reauth tool).
     const serverUrl = this.extractServerUrl()
-    if (hasCachedTokens(serverUrl)) {
+    let reconnecting = false
+    try {
+      reconnecting = fs.existsSync(RECONNECT_FLAG)
+      if (reconnecting) fs.unlinkSync(RECONNECT_FLAG)
+    } catch { /* ignore */ }
+
+    if (reconnecting || hasCachedTokens(serverUrl)) {
       try {
         this.official = await this.connectOfficial()
       } catch (err) {
@@ -194,10 +204,11 @@ export class OhMyNotionRouter {
       process.exit(0)
     })
     process.on('SIGTERM', async () => {
-      // Clear OAuth tokens so next start triggers fresh auth on first tool call
+      // Clear OAuth tokens + write reconnect flag for eager reauth on next start
       const urlHash = crypto.createHash('md5').update(serverUrl).digest('hex')
       findAndClearTokenCache(urlHash)
-      console.error(`[${APP_DISPLAY_NAME}] OAuth tokens cleared for reconnect`)
+      try { fs.writeFileSync(RECONNECT_FLAG, '') } catch { /* ignore */ }
+      console.error(`[${APP_DISPLAY_NAME}] OAuth tokens cleared + reconnect flag set`)
       await this.shutdown()
       process.exit(0)
     })
