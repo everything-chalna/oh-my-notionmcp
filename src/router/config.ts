@@ -42,7 +42,7 @@ export function resolveOfficialBackendConfig(): BackendSpec {
 
   if (officialCommand === 'npx' && !npxFallbackAllowed()) {
     throw new Error(
-      'npx fallback for official backend is disabled. Install mcp-remote locally or set OHMY_NOTION_ALLOW_NPX_FALLBACK=true',
+      'mcp-remote is not installed locally. Run `npm install mcp-remote` or set OHMY_NOTION_ALLOW_NPX_FALLBACK=true',
     )
   }
 

@@ -73,7 +73,7 @@ type CachedMcpToolResponse = {
 
 let hasLoggedLocalAppCacheTrustWarning = false
 
-// import this class, extend and return server
+/** MCP server that auto-generates read-only tools from an OpenAPI spec, with response caching and optional local SQLite fast-path. */
 export class MCPProxy {
   private server: Server
   private httpClient: HttpClient

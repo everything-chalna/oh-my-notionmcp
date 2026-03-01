@@ -116,6 +116,7 @@ oh-my-notionmcp serve-fast [--transport <stdio|http>]    # Standalone fast read-
 oh-my-notionmcp install [--project <dir>] [--name <name>]
 oh-my-notionmcp login
 oh-my-notionmcp doctor [--project <dir>] [--name <name>] [--allow-missing-auth]
+oh-my-notionmcp reauth                                   # Clear OAuth token cache
 ```
 
 ### serve-fast (standalone)
@@ -222,11 +223,63 @@ Freshness depends on Notion desktop sync state. Incomplete snapshots fall back t
 
 ## Troubleshooting
 
-`npx fallback for official backend is disabled` -- Configure `OHMY_NOTION_OFFICIAL_COMMAND` + `OHMY_NOTION_OFFICIAL_ARGS_JSON`, or set `OHMY_NOTION_ALLOW_NPX_FALLBACK=true`.
+### OAuth Token Not Found / Expired
+
+```
+FAIL: OAuth token cache not found
+```
+
+Run `oh-my-notionmcp login` to initialize or refresh the OAuth token. Complete browser authentication, then press Ctrl+C after seeing "Proxy established".
+
+If the token exists but is expired, the server will hint: "Token may be expired — try `oh-my-notionmcp login`".
+
+### mcp-remote Not Installed
+
+```
+npx fallback for official backend is disabled
+```
+
+Install mcp-remote as a local dependency:
+```bash
+npm install mcp-remote
+```
+
+Or enable npx fallback (not recommended for production):
+```bash
+export OHMY_NOTION_ALLOW_NPX_FALLBACK=true
+```
+
+### Connection Timeout
+
+If the official backend takes more than 30 seconds to connect, the router enters degraded mode (read-only via fast backend). Check:
+
+1. Network connectivity to `mcp.notion.com`
+2. OAuth token validity (`oh-my-notionmcp doctor`)
+3. mcp-remote installation (`oh-my-notionmcp doctor`)
+
+### Re-authenticating (Token Refresh)
+
+If you need to force a fresh OAuth login (expired tokens, wrong account, scope issues):
+
+**Option 1: Via MCP tool** (while server is running)
+
+Use the `oh-my-notionmcp-reauth` tool from your MCP client (e.g., Claude). This clears cached tokens and reconnects automatically.
+
+**Option 2: Via CLI**
+
+```bash
+oh-my-notionmcp reauth   # Clear cached tokens
+oh-my-notionmcp login     # Re-authenticate with Notion
+oh-my-notionmcp doctor    # Verify everything works
+```
+
+### Backend Reconnection
+
+If the official backend process crashes during operation, the router automatically attempts one reconnect (10-second timeout). If reconnect fails, subsequent calls return an error with both the original and reconnect failure reasons.
+
+### Other Issues
 
 `FAIL: missing .mcp.json` -- Run `install --project /your/project`.
-
-`FAIL: OAuth token cache not found` -- Run `oh-my-notionmcp login`, complete browser auth, then rerun `doctor`.
 
 `Reads seem stale` -- Open Notion desktop to refresh local cache. Empty/error local reads fall back to official MCP automatically.
 

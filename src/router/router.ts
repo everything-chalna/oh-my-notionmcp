@@ -16,6 +16,7 @@ import {
   APP_VERSION,
   extractUuidish,
   isErrorToolResult,
+  looksAuthError,
   looksEmptyReadResult,
   looksReadTool,
   looksWriteTool,
@@ -26,6 +27,22 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+const REAUTH_TOOL_NAME = 'oh-my-notionmcp-reauth'
+
+const META_TOOLS: Tool[] = [
+  {
+    name: REAUTH_TOOL_NAME,
+    description:
+      'Force re-authentication of the official Notion MCP OAuth token. ' +
+      'Clears cached OAuth tokens, disconnects, and reconnects with fresh credentials. ' +
+      'Use when: token expired, need to switch accounts, or getting persistent auth errors.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
+]
+
 /** Common interface for both fast (in-process) and official (child-process) backends. */
 export interface BackendAdapter {
   tools: Tool[]
@@ -35,10 +52,7 @@ export interface BackendAdapter {
   close(): Promise<void>
 }
 
-/**
- * In-process adapter that wraps MCPProxy via an in-memory MCP Client/Server pair.
- * Avoids spawning a child process for the fast backend.
- */
+/** In-process adapter wrapping MCPProxy via an in-memory MCP transport pair. */
 export class FastBackendAdapter implements BackendAdapter {
   private client: Client
   private clientTransport: InMemoryTransport
@@ -117,6 +131,7 @@ export interface RouteEntry {
   toolName: string
 }
 
+/** Main router that merges fast (in-process) and official (child-process) backends behind a single MCP server. */
 export class OhMyNotionRouter {
   private officialSpec: BackendSpec
   private server: Server
@@ -135,6 +150,7 @@ export class OhMyNotionRouter {
     this.routes = new Map()
   }
 
+  /** Connect both backends, build routing table, and begin serving over stdio. */
   async start(): Promise<void> {
     const backendErrors: string[] = []
 
@@ -196,10 +212,14 @@ export class OhMyNotionRouter {
 
   private async connectOfficial(): Promise<BackendClient> {
     const client = new BackendClient('official', this.officialSpec)
-    await client.connect()
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('official backend connect timed out after 30s')), 30_000),
+    )
+    await Promise.race([client.connect(), timeout])
     return client
   }
 
+  /** Build the tool routing table from the union of fast and official tool sets. */
   buildRoutingTable(): void {
     const officialTools = this.official ? this.official.tools : []
     const fastTools = this.fast ? this.fast.tools : []
@@ -265,12 +285,18 @@ export class OhMyNotionRouter {
 
   private setupHandlers(): void {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return { tools: this.exposedTools }
+      return { tools: [...this.exposedTools, ...META_TOOLS] }
     })
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const toolName = request.params.name
       const args = (request.params.arguments || {}) as Record<string, unknown>
+
+      // Handle meta tools first
+      if (toolName === REAUTH_TOOL_NAME) {
+        return this.handleReauth()
+      }
+
       const route = this.routes.get(toolName)
 
       if (!route) {
@@ -330,10 +356,48 @@ export class OhMyNotionRouter {
     try {
       return await this.official.callTool(toolName, args)
     } catch (error) {
-      return toToolError('official backend call failed', {
+      const reason = error instanceof Error ? error.message : String(error)
+      const hint = looksAuthError(reason) ? '. Token may be expired — try `oh-my-notionmcp login`' : ''
+      return toToolError('official backend call failed' + hint, {
         tool: toolName,
-        reason: error instanceof Error ? error.message : String(error),
+        reason,
       })
+    }
+  }
+
+  private async handleReauth(): Promise<ToolResult> {
+    if (!this.official) {
+      return toToolError('Cannot reauth: official backend is not connected. Run `oh-my-notionmcp login` first.')
+    }
+
+    try {
+      // BackendClient (not BackendAdapter) has reauth()
+      if (!('reauth' in this.official)) {
+        return toToolError('Cannot reauth: official backend does not support reauth')
+      }
+      const result = await (this.official as BackendClient).reauth()
+
+      // Rebuild routing table with potentially refreshed tools
+      this.buildRoutingTable()
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              status: result.status,
+              message: result.message,
+              deletedFiles: result.deletedFiles,
+              searchedDirs: result.searchedDirs,
+              toolCount: this.official.tools.length,
+            }),
+          },
+        ],
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      const hint = looksAuthError(reason) ? ' You may need to run `oh-my-notionmcp login` to complete OAuth.' : ''
+      return toToolError(`Reauth failed: ${reason}${hint}`)
     }
   }
 

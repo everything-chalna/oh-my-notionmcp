@@ -203,3 +203,96 @@ describe('HttpClient File Upload', () => {
     expect(mockApiInstance.uploadFile).toHaveBeenCalledWith({}, expect.any(FormData), { headers: mockFormDataHeaders })
   })
 })
+
+describe('prepareFileUpload path traversal', () => {
+  let client: HttpClient
+  const mockApiInstance = {
+    uploadFile: vi.fn(),
+  }
+
+  const baseConfig = {
+    baseUrl: 'http://test.com',
+    headers: {},
+  }
+
+  const uploadSpec: OpenAPIV3.Document = {
+    openapi: '3.0.0',
+    info: { title: 'Test API', version: '1.0.0' },
+    paths: {
+      '/upload': {
+        post: {
+          operationId: 'uploadFile',
+          responses: { '200': { description: 'OK' } },
+          requestBody: {
+            content: {
+              'multipart/form-data': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    file: { type: 'string', format: 'binary' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    client = new HttpClient(baseConfig, uploadSpec)
+    // @ts-expect-error - Mock the private api property
+    client['api'] = Promise.resolve(mockApiInstance)
+  })
+
+  it('rejects file paths containing .. traversal', async () => {
+    const operation = uploadSpec.paths['/upload']!.post as OpenAPIV3.OperationObject & { method: string; path: string }
+
+    await expect(
+      client.executeOperation(operation, { file: '/uploads/../etc/passwd' }),
+    ).rejects.toThrow('Path traversal detected')
+  })
+
+  it('accepts normal absolute file paths', async () => {
+    const mockFileStream = { pipe: vi.fn() }
+    vi.mocked(fs.createReadStream).mockReturnValue(mockFileStream as any)
+    vi.spyOn(FormData.prototype, 'append').mockImplementation(() => {})
+    vi.spyOn(FormData.prototype, 'getHeaders').mockReturnValue({ 'content-type': 'multipart/form-data' })
+
+    mockApiInstance.uploadFile.mockResolvedValue({
+      data: { success: true },
+      status: 200,
+      headers: {},
+    })
+
+    const operation = uploadSpec.paths['/upload']!.post as OpenAPIV3.OperationObject & { method: string; path: string }
+
+    await expect(
+      client.executeOperation(operation, { file: '/tmp/uploads/file.txt' }),
+    ).resolves.toBeDefined()
+
+    expect(fs.createReadStream).toHaveBeenCalledWith('/tmp/uploads/file.txt')
+  })
+
+  it('accepts normal relative file paths without traversal', async () => {
+    const mockFileStream = { pipe: vi.fn() }
+    vi.mocked(fs.createReadStream).mockReturnValue(mockFileStream as any)
+    vi.spyOn(FormData.prototype, 'append').mockImplementation(() => {})
+    vi.spyOn(FormData.prototype, 'getHeaders').mockReturnValue({ 'content-type': 'multipart/form-data' })
+
+    mockApiInstance.uploadFile.mockResolvedValue({
+      data: { success: true },
+      status: 200,
+      headers: {},
+    })
+
+    const operation = uploadSpec.paths['/upload']!.post as OpenAPIV3.OperationObject & { method: string; path: string }
+
+    // Relative path without '..' should be accepted
+    await expect(
+      client.executeOperation(operation, { file: 'uploads/file.txt' }),
+    ).resolves.toBeDefined()
+  })
+})

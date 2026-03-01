@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -237,6 +238,16 @@ export function buildChildEnv(extra: Record<string, string> = {}): Record<string
   }
 }
 
+export function looksAuthError(message: string): boolean {
+  const lower = message.toLowerCase()
+  return (
+    lower.includes('401') ||
+    lower.includes('unauthorized') ||
+    (lower.includes('token') && (lower.includes('expired') || lower.includes('invalid'))) ||
+    lower.includes('authentication')
+  )
+}
+
 export function sensitiveEnvKey(key: string): boolean {
   const normalized = String(key || '').toUpperCase()
   return (
@@ -265,6 +276,59 @@ export function sanitizePersistedEnv(envObj: Record<string, string> | undefined)
   return { sanitized, redactedKeys }
 }
 
+export function findAndClearTokenCache(serverHash: string): {
+  deletedFiles: number
+  searchedDirs: string[]
+} {
+  const baseDir = process.env.MCP_REMOTE_CONFIG_DIR || path.join(os.homedir(), '.mcp-auth')
+  if (!fs.existsSync(baseDir)) {
+    return { deletedFiles: 0, searchedDirs: [] }
+  }
+
+  let versionDirs: string[] = []
+  try {
+    versionDirs = fs
+      .readdirSync(baseDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('mcp-remote-'))
+      .map((entry) => path.join(baseDir, entry.name))
+  } catch {
+    return { deletedFiles: 0, searchedDirs: [] }
+  }
+
+  let deletedFiles = 0
+  const searchedDirs: string[] = []
+
+  for (const dir of versionDirs) {
+    searchedDirs.push(dir)
+    for (const suffix of ['_tokens.json', '_client_info.json', '_code_verifier.txt']) {
+      const filePath = path.join(dir, `${serverHash}${suffix}`)
+      if (fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath)
+          deletedFiles += 1
+        } catch {
+          // ignore delete errors
+        }
+      }
+    }
+    // Also check hash subdirectory pattern
+    const subDir = path.join(dir, serverHash)
+    if (fs.existsSync(subDir) && fs.statSync(subDir).isDirectory()) {
+      const tokensFile = path.join(subDir, 'tokens.json')
+      if (fs.existsSync(tokensFile)) {
+        try {
+          fs.unlinkSync(tokensFile)
+          deletedFiles += 1
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  return { deletedFiles, searchedDirs }
+}
+
 export interface RunCommandOptions {
   cwd?: string
   stdio?: 'pipe' | 'inherit'
@@ -291,6 +355,7 @@ Usage:
   ${APP_BIN_NAME} serve
   ${APP_BIN_NAME} install [--project <dir>] [--name <mcp-server-name>]
   ${APP_BIN_NAME} login
+  ${APP_BIN_NAME} reauth
   ${APP_BIN_NAME} doctor [--project <dir>] [--name <mcp-server-name>] [--allow-missing-auth]
 
 Commands:
@@ -303,6 +368,9 @@ Commands:
 
   login    Start official MCP OAuth flow via mcp-remote
            Complete browser auth, then Ctrl+C after "Proxy established"
+
+  reauth   Clear OAuth token cache for official MCP backend
+           Removes cached tokens, run 'login' again to re-authenticate
 
   doctor   Validate config and auth readiness
 

@@ -61,7 +61,6 @@ export class ReadResponseCache<T> {
   }
 
   get size(): number {
-    this.pruneExpired()
     return this.entries.size
   }
 
@@ -89,8 +88,11 @@ export class ReadResponseCache<T> {
       accessedAt: now,
     })
 
+    // Combined pruning: first remove expired, then check max entries
     this.pruneExpired(now)
-    this.pruneMaxEntries()
+    if (this.entries.size > this.maxEntries) {
+      this.pruneMaxEntries()
+    }
   }
 
   delete(key: string): boolean {

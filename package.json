@@ -25,7 +25,10 @@
     "login": "node bin/cli.mjs login",
     "test": "NODE_ENV=test vitest run",
     "test:watch": "NODE_ENV=test vitest",
-    "test:coverage": "NODE_ENV=test vitest run --coverage"
+    "test:coverage": "NODE_ENV=test vitest run --coverage",
+    "lint": "eslint src/ test/",
+    "format": "prettier --write 'src/**/*.ts' 'test/**/*.ts'",
+    "format:check": "prettier --check 'src/**/*.ts' 'test/**/*.ts'"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.1",
@@ -45,6 +48,7 @@
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.33.1",
+    "@eslint/js": "^9.39.3",
     "@types/express": "^5.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/json-schema": "^7.0.15",
@@ -53,9 +57,12 @@
     "@types/which": "^3.0.4",
     "@vitest/coverage-v8": "^4.0.18",
     "esbuild": "^0.25.2",
+    "eslint": "^9.39.3",
     "multer": "1.4.5-lts.1",
     "openai": "^4.91.1",
+    "prettier": "^3.8.1",
     "typescript": "^5.8.2",
+    "typescript-eslint": "^8.56.1",
     "vitest": "^4.0.18"
   },
   "keywords": [

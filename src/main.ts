@@ -12,15 +12,17 @@ import express from 'express'
 import { initProxy, ValidationError } from './fast/init-server.js'
 import { parseLocalAppCacheConfig } from './fast/openapi-mcp-server/local-app-cache/config.js'
 import { resolveOfficialBackendConfig } from './router/config.js'
-import { commandDoctor } from './router/doctor.js'
+import { commandDoctor, extractMcpRemoteHashContext, hashForMcpRemoteContext, getMcpRemoteServerHash } from './router/doctor.js'
 import { commandInstall } from './router/install.js'
 import { commandLogin } from './router/login.js'
 import { OhMyNotionRouter } from './router/router.js'
 import {
   APP_BIN_NAME,
   APP_DISPLAY_NAME,
+  findAndClearTokenCache,
   parseArgs,
   printHelp,
+  type ParsedOptions,
 } from './router/utils.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -36,9 +38,13 @@ function readSingleHeader(value: string | string[] | undefined): string | undefi
 
 function printUnifiedHelp(): void {
   printHelp()
-  console.log(`  ${APP_BIN_NAME} serve-fast [--transport <stdio|http>] [--port <number>] [--auth-token <token>] [--disable-auth]
+  console.log(`  ${APP_BIN_NAME} reauth
+  ${APP_BIN_NAME} serve-fast [--transport <stdio|http>] [--port <number>] [--auth-token <token>] [--disable-auth]
 
 Commands (continued):
+  reauth      Clear OAuth token cache for official MCP backend
+              Removes cached tokens, run 'login' again to re-authenticate
+
   serve-fast  Start standalone fast read-only MCP server
               Supports stdio (default) and HTTP transports
 
@@ -58,6 +64,35 @@ serve-fast Environment Variables:
   NOTION_MCP_FAST_LOCAL_APP_CACHE_ENABLED     Local DB fast-path gate (default: false)
   NOTION_MCP_FAST_LOCAL_APP_CACHE_TRUST_ENABLED  Local DB trust gate (default: false)
 `)
+}
+
+function commandReauth(_options?: ParsedOptions): void {
+  const officialBackend = resolveOfficialBackendConfig()
+  const ctx = extractMcpRemoteHashContext(officialBackend.command, officialBackend.args)
+  const contextHash = hashForMcpRemoteContext(ctx.serverUrl, ctx.authorizeResource, ctx.headers)
+  const defaultHash = getMcpRemoteServerHash()
+  const candidateHashes = [...new Set([defaultHash, contextHash])]
+
+  let totalDeleted = 0
+  const allSearchedDirs: string[] = []
+
+  for (const hash of candidateHashes) {
+    const result = findAndClearTokenCache(hash)
+    totalDeleted += result.deletedFiles
+    allSearchedDirs.push(...result.searchedDirs)
+  }
+
+  if (totalDeleted > 0) {
+    console.log(`Cleared ${totalDeleted} OAuth token cache file(s)`)
+    console.log(`Searched directories: ${[...new Set(allSearchedDirs)].join(', ')}`)
+  } else {
+    console.log('No OAuth token cache files found to clear')
+  }
+
+  console.log('')
+  console.log('Next steps:')
+  console.log(`1) ${APP_BIN_NAME} login     (re-authenticate with Notion)`)
+  console.log(`2) ${APP_BIN_NAME} doctor    (verify configuration)`)
 }
 
 async function commandServe(): Promise<void> {
@@ -132,8 +167,8 @@ async function commandServeFast(argv: string[]): Promise<void> {
     if (!options.disableAuth) {
       authToken = options.authToken || process.env.AUTH_TOKEN || randomBytes(32).toString('hex')
       if (!options.authToken && !process.env.AUTH_TOKEN) {
-        console.log(`Generated auth token: ${authToken}`)
-        console.log(`Use this token in the Authorization header: Bearer ${authToken}`)
+        console.error(`Generated auth token: ${authToken}`)
+        console.error(`Use this token in the Authorization header: Bearer ${authToken}`)
       }
     }
 
@@ -304,6 +339,11 @@ async function main(): Promise<void> {
 
   if (command === 'login') {
     commandLogin(options)
+    return
+  }
+
+  if (command === 'reauth') {
+    commandReauth(options)
     return
   }
 

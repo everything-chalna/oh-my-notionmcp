@@ -2,7 +2,8 @@ import type { OpenAPIV3, OpenAPIV3_1 } from 'openapi-types'
 import OpenAPIClientAxios from 'openapi-client-axios'
 import type { AxiosInstance } from 'axios'
 import FormData from 'form-data'
-import fs from 'fs'
+import fs from 'node:fs'
+import path from 'node:path'
 import { Headers } from './polyfill-headers'
 import { isFileUploadParameter } from '../openapi/file-upload'
 
@@ -91,9 +92,13 @@ export class HttpClient {
           throw new Error(`Unsupported file type: ${typeof filePath}`)
       }
       function addFile(name: string, filePath: string) {
-          try {
-            const fileStream = fs.createReadStream(filePath)
-            formData.append(name, fileStream)
+        const resolved = path.resolve(filePath)
+        if (resolved !== filePath && filePath.includes('..')) {
+          throw new Error(`Path traversal detected in file path: ${filePath}`)
+        }
+        try {
+          const fileStream = fs.createReadStream(resolved)
+          formData.append(name, fileStream)
         } catch (error) {
           throw new Error(`Failed to read file at ${filePath}: ${error}`)
         }

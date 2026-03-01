@@ -52,6 +52,7 @@ oh-my-notionmcp serve-fast     # Start standalone fast read-only server
 oh-my-notionmcp install        # Add/update router entry in .mcp.json
 oh-my-notionmcp login          # OAuth bootstrap for official backend
 oh-my-notionmcp doctor         # Config validation
+oh-my-notionmcp reauth         # Clear OAuth token cache (run login again after)
 ```
 
 ## Adding New Notion API Endpoints
@@ -86,6 +87,88 @@ npx vitest run test/router/      # Router tests only
 ```
 
 Tests are under `test/fast/` and `test/router/`, mirroring the source structure.
+
+## Connection Flow
+
+### Install → Login → Doctor → Serve
+
+1. `oh-my-notionmcp install` — writes MCP server entry to `.mcp.json`
+2. `oh-my-notionmcp login` — OAuth bootstrap via mcp-remote (complete in browser, Ctrl+C after "Proxy established")
+3. `oh-my-notionmcp doctor` — validates config + auth readiness
+4. `oh-my-notionmcp serve` — starts router server
+
+### Reconnect Behavior
+
+When the official backend (child process) crashes or becomes unresponsive:
+
+1. `callTool()` fails → automatic reconnect attempt (1 retry only)
+2. Reconnect: close old transport → create new Client + StdioClientTransport → connect → listTools
+3. Reconnect timeout: 10 seconds
+4. If reconnect succeeds: retry the original tool call
+5. If reconnect fails: return clear error with both original + reconnect failure reasons
+
+### Connect Timeout
+
+- `connectOfficial()` has a 30-second timeout
+- If timeout expires, router enters degraded mode (fast-only, read-only tools)
+- Warning logged to stderr
+
+### Auth Error Detection
+
+- When official backend returns 401/unauthorized/token expired errors
+- Error response includes hint: "Token may be expired — try `oh-my-notionmcp login`"
+
+### Re-authentication (reauth)
+
+When OAuth tokens become invalid or need to be refreshed:
+
+**Via MCP tool** (during a live session):
+- Tool name: `oh-my-notionmcp-reauth`
+- Clears cached OAuth tokens from `~/.mcp-auth/mcp-remote-*/`
+- Disconnects the official backend
+- Reconnects with fresh credentials (triggers new OAuth flow)
+- Rebuilds the routing table
+
+**Via CLI** (standalone):
+- Command: `oh-my-notionmcp reauth`
+- Clears cached token files only (no reconnect)
+- Follow with `oh-my-notionmcp login` to re-authenticate
+
+Token cache files cleared:
+- `{hash}_tokens.json`
+- `{hash}_client_info.json`
+- `{hash}_code_verifier.txt`
+
+Where `{hash}` is MD5 of the MCP server URL.
+
+## Security
+
+### File Path Validation
+
+`prepareFileUpload()` in `http-client.ts` validates file paths to prevent path traversal:
+- Paths containing `..` components are rejected
+- Error: "Path traversal detected in file path: <path>"
+
+### Token Handling
+
+- Generated auth tokens for HTTP transport are output to stderr (not stdout)
+- Prevents token leakage through MCP stdio transport
+- Sensitive env keys (TOKEN, SECRET, PASSWORD, AUTH, _KEY, PRIVATE) are redacted from persisted .mcp.json config
+
+## Environment Variables
+
+| Variable | Description | Default |
+|---|---|---|
+| OHMY_NOTION_OFFICIAL_COMMAND | Override official backend command | `node` (local) / `npx` (fallback) |
+| OHMY_NOTION_OFFICIAL_ARGS_JSON | Override official backend args (JSON array) | auto-detected |
+| OHMY_NOTION_OFFICIAL_ENV_JSON | Extra env vars for official backend (JSON object) | `{}` |
+| OHMY_NOTION_OFFICIAL_CWD | Working directory for official backend | undefined |
+| OHMY_NOTION_ALLOW_NPX_FALLBACK | Allow npx when local mcp-remote not found | `false` |
+| NOTION_MCP_FAST_CACHE_ENABLED | Enable read response cache | `true` |
+| NOTION_MCP_FAST_CACHE_TTL_MS | Cache TTL in milliseconds | `30000` |
+| NOTION_MCP_FAST_CACHE_MAX_ENTRIES | Maximum cache entries | `300` |
+| NOTION_MCP_FAST_CACHE_PATH | Custom cache file path | `~/.cache/oh-my-notionmcp/read-cache-v1.json` |
+| MCP_REMOTE_CONFIG_DIR | Override mcp-remote config directory | `~/.mcp-auth` |
 
 ## API Version
 
