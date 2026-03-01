@@ -3,6 +3,14 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { OhMyNotionRouter } from '../../src/router/router.js'
 import { createMockBackend } from '../helpers/mock-backend.js'
 
+vi.mock('../../src/router/utils.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/router/utils.js')>()
+  return {
+    ...actual,
+    hasCachedTokens: vi.fn().mockReturnValue(true),
+  }
+})
+
 afterEach(() => {
   vi.useRealTimers()
 })

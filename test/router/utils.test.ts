@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 
 import {
   parseArgs,
@@ -12,6 +15,7 @@ import {
   parseBool,
   parseJsonObject,
   parseJsonStringArray,
+  hasCachedTokens,
 } from '../../src/router/utils'
 
 describe('parseArgs', () => {
@@ -238,5 +242,76 @@ describe('parseJsonStringArray', () => {
 
   it('throws on invalid JSON', () => {
     expect(() => parseJsonStringArray('[bad', 'TEST')).toThrow('TEST must be valid JSON')
+  })
+})
+
+describe('hasCachedTokens', () => {
+  let tmpDir: string
+  const origEnv = process.env.MCP_REMOTE_CONFIG_DIR
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hasCachedTokens-'))
+    process.env.MCP_REMOTE_CONFIG_DIR = tmpDir
+  })
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+    if (origEnv === undefined) {
+      delete process.env.MCP_REMOTE_CONFIG_DIR
+    } else {
+      process.env.MCP_REMOTE_CONFIG_DIR = origEnv
+    }
+  })
+
+  it('returns false when base dir does not exist', () => {
+    process.env.MCP_REMOTE_CONFIG_DIR = path.join(tmpDir, 'nonexistent')
+    expect(hasCachedTokens('https://example.com/mcp')).toBe(false)
+  })
+
+  it('returns false when no version dirs exist', () => {
+    expect(hasCachedTokens('https://example.com/mcp')).toBe(false)
+  })
+
+  it('returns false when version dirs exist but no matching token files', () => {
+    const versionDir = path.join(tmpDir, 'mcp-remote-0.1.0')
+    fs.mkdirSync(versionDir)
+    fs.writeFileSync(path.join(versionDir, 'other_tokens.json'), '{}')
+    expect(hasCachedTokens('https://example.com/mcp')).toBe(false)
+  })
+
+  it('returns true when {hash}_tokens.json exists in a version dir', () => {
+    const versionDir = path.join(tmpDir, 'mcp-remote-0.1.37')
+    fs.mkdirSync(versionDir)
+    // MD5 of 'https://mcp.notion.com/mcp' = cb42d1a06ae8db4e5585a26f2e5ca947
+    const url = 'https://mcp.notion.com/mcp'
+    const crypto = require('node:crypto')
+    const hash = crypto.createHash('md5').update(url).digest('hex')
+    fs.writeFileSync(path.join(versionDir, `${hash}_tokens.json`), '{}')
+    expect(hasCachedTokens(url)).toBe(true)
+  })
+
+  it('returns true when tokens.json exists in hash subdirectory', () => {
+    const versionDir = path.join(tmpDir, 'mcp-remote-0.2.0')
+    fs.mkdirSync(versionDir)
+    const url = 'https://mcp.linear.app/mcp'
+    const crypto = require('node:crypto')
+    const hash = crypto.createHash('md5').update(url).digest('hex')
+    const subDir = path.join(versionDir, hash)
+    fs.mkdirSync(subDir)
+    fs.writeFileSync(path.join(subDir, 'tokens.json'), '{}')
+    expect(hasCachedTokens(url)).toBe(true)
+  })
+
+  it('respects MCP_REMOTE_CONFIG_DIR env override', () => {
+    const customDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hasCachedTokens-custom-'))
+    process.env.MCP_REMOTE_CONFIG_DIR = customDir
+    const versionDir = path.join(customDir, 'mcp-remote-0.1.0')
+    fs.mkdirSync(versionDir)
+    const url = 'https://test.example.com/mcp'
+    const crypto = require('node:crypto')
+    const hash = crypto.createHash('md5').update(url).digest('hex')
+    fs.writeFileSync(path.join(versionDir, `${hash}_tokens.json`), '{}')
+    expect(hasCachedTokens(url)).toBe(true)
+    fs.rmSync(customDir, { recursive: true, force: true })
   })
 })

@@ -16,6 +16,7 @@ import {
   APP_VERSION,
   OFFICIAL_MCP_URL,
   extractUuidish,
+  hasCachedTokens,
 
   isErrorToolResult,
   looksAuthError,
@@ -156,7 +157,22 @@ export class OhMyNotionRouter {
   async start(): Promise<void> {
     const backendErrors: string[] = []
 
-    const [fastResult, officialResult] = await Promise.allSettled([this.connectFast(), this.connectOfficial()])
+    // Only attempt official backend connection if cached OAuth tokens exist.
+    // This prevents mcp-remote from opening a browser window for OAuth on every startup.
+    const serverUrl = this.extractServerUrl()
+    const shouldConnectOfficial = hasCachedTokens(serverUrl)
+
+    if (!shouldConnectOfficial) {
+      console.error(`[${APP_DISPLAY_NAME}] No cached OAuth tokens for official backend; skipping eager connect (run 'oh-my-notionmcp login' to authenticate)`)
+    }
+
+    const settledResults = await Promise.allSettled([
+      this.connectFast(),
+      ...(shouldConnectOfficial ? [this.connectOfficial()] : []),
+    ])
+
+    const fastResult = settledResults[0]
+    const officialResult = shouldConnectOfficial ? settledResults[1] : undefined
 
     if (fastResult.status === 'rejected') {
       backendErrors.push(
@@ -164,16 +180,18 @@ export class OhMyNotionRouter {
       )
       this.fast = null
     } else {
-      this.fast = fastResult.value
+      this.fast = fastResult.value as FastBackendAdapter
     }
 
-    if (officialResult.status === 'rejected') {
+    if (!shouldConnectOfficial) {
+      this.official = null
+    } else if (officialResult!.status === 'rejected') {
       backendErrors.push(
-        `official backend unavailable: ${officialResult.reason instanceof Error ? officialResult.reason.message : String(officialResult.reason)}`,
+        `official backend unavailable: ${officialResult!.reason instanceof Error ? officialResult!.reason.message : String(officialResult!.reason)}`,
       )
       this.official = null
     } else {
-      this.official = officialResult.value
+      this.official = (officialResult as PromiseFulfilledResult<BackendClient>).value
     }
 
     if (!this.fast && !this.official) {

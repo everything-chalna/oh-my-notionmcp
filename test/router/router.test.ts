@@ -8,6 +8,14 @@ import { buildChildEnv, looksEmptyReadResult } from '../../src/router/utils'
 import { findMcpRemoteTokenFile } from '../../src/router/doctor'
 import { createMockBackend } from '../helpers/mock-backend'
 
+vi.mock('../../src/router/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/router/utils')>()
+  return {
+    ...actual,
+    hasCachedTokens: vi.fn().mockReturnValue(true),
+  }
+})
+
 function restoreEnv(snapshot: Record<string, string | undefined>) {
   for (const [key, value] of Object.entries(snapshot)) {
     if (value === undefined) {

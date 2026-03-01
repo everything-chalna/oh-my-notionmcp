@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -274,6 +275,29 @@ export function sanitizePersistedEnv(envObj: Record<string, string> | undefined)
     sanitized[key] = String(value)
   }
   return { sanitized, redactedKeys }
+}
+
+export function hasCachedTokens(serverUrl: string): boolean {
+  const urlHash = crypto.createHash('md5').update(serverUrl).digest('hex')
+  const baseDir = process.env.MCP_REMOTE_CONFIG_DIR || path.join(os.homedir(), '.mcp-auth')
+  if (!fs.existsSync(baseDir)) return false
+
+  let versionDirs: string[]
+  try {
+    versionDirs = fs
+      .readdirSync(baseDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('mcp-remote-'))
+      .map((entry) => path.join(baseDir, entry.name))
+  } catch {
+    return false
+  }
+
+  for (const dir of versionDirs) {
+    if (fs.existsSync(path.join(dir, `${urlHash}_tokens.json`))) return true
+    const subDir = path.join(dir, urlHash)
+    if (fs.existsSync(path.join(subDir, 'tokens.json'))) return true
+  }
+  return false
 }
 
 export function findAndClearTokenCache(serverHash: string): {
