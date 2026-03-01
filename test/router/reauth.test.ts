@@ -162,14 +162,16 @@ describe('findAndClearTokenCache', () => {
 // ─── Router reauth meta tool ─────────────────────────────────────────────────
 
 describe('router reauth meta tool', () => {
-  it('handleReauth returns error when official is null', async () => {
+  it('handleReauth returns error when official is null and lazy connect fails', async () => {
     const router = new OhMyNotionRouter({ officialBackend: {} })
     router.official = null
+    // Patch connectOfficial to fail (simulates no auth / network error)
+    ;(router as any).connectOfficial = () => Promise.reject(new Error('connect failed'))
 
     const result = await (router as any).handleReauth()
 
     expect(result.isError).toBe(true)
-    expect(result.content[0].text).toContain('official backend is not connected')
+    expect(result.content[0].text).toContain('oh-my-notionmcp login')
   })
 
   it('handleReauth returns error when backend has no reauth method', async () => {
